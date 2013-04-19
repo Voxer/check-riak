@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+#
+# Riak health check
+#
+# Author: Dave Eddy <dave@daveeddy.com>
+# License: MIT
+
+# colors
+_bold=$(tput bold 2>/dev/null)
+_yellow=$(tput setaf 3 2>/dev/null)
+_reset=$(tput sgr0 2>/dev/null)
+
+# find erl and escript
+erts_dirs=('/opt/local/riak/erts-5.8.5/bin' '/opt/local/lib/riak/erts-5.9.1/bin')
+for dir in "${erts_dirs[@]}"; do
+	[[ -d "$dir" ]] && break
+done
+if [[ ! -d "$dir" ]]; then
+	echo '[warning] erts directory not found, escript and erl commands will fail' >&2
+fi
+erl=$dir/erl
+escript=$dir/escript
+
+# find 3rd party scripts
+lib_dirs=('./lib' '/opt/local/share/check-riak/lib')
+for dir in "${lib_dirs[@]}"; do
+	[[ -f "$dir/lvlfix.erl" ]] && break
+done
+if [[ ! -f "$dir/lvlfix.erl" ]]; then
+	echo '[warning] lib directory not found, third party commands will fail' >&2
+fi
+lvlfix=$dir/lvlfix.erl
+oktostart=$dir/oktostart.erl
+
+# Add commas to a given input
+_commas() {
+	sed -e :a -e 's/\(.*[0-9]\)\([0-9]\{3\}\)/\1,\2/;ta'
+}
+
+# print usage
+usage() {
+	cat <<-EOF
+	usage: ${0##*/} [ options ] [ check ]
+
+	run this script with no options to get an overview of riak health
+	on a system.
+
+	give an optional parameter to only check one portion of the system.
+
+	examples
+	  check-riak                # full system health overview
+	  check-riak compaction     # only check for compaction errors
+	  check-riak -n compaction  # check for compaction, output suitable for nagios
+
+	options
+	  -a              run all checks
+	  -c <config>     the riak config file to use, defaults to $riak_config
+	  -d <dir>        the database directory, defaults to $db_dir
+	  -h              print this message and exit
+	  -H <host>       the riak host, defaults to $riak_host
+	  -n              less pretty output suitable for a nagios check
+	  -p <port>       the riak port, defaults to $riak_port
+	  -s <svc>        the service fmri to use for SMF, defaults to $svc_name
+	  -t <seconds>    the timeout, in seconds, when curl'ing riak, defaults to $stats_timeout
+	  -W <bytes>      the warning threshold for rss in bytes, defaults to $rss_warning
+	  -C <bytes>      the critical threshold for rss in bytes, defaults to $rss_critical
+
+	optional arguments
+	  compaction      check for compaction errors
+	  config          show the first line of the riak config
+	  oktostart       check if riak is ok to start
+	  ping            check riak ping using /ping
+	  process         parse ps for the running process
+	  profile         profile beam.smp with DTrace
+	  riakping        check riak ping locally
+	  rss             check riak rss
+	  service         show svcs output for riak
+	  singleton       see if this machine is a single cluster
+	  stats           check riak stats (riak_kv_vnodes_running)
+	  system          check riak system health
+
+	EOF
+}
+
+# Print a header
+header() {
+	$nagios || printf '\n%s%40s%s\n' "$_yellow" "$1" "$_reset"
+}
+
+# Print riak purpose
+show_config() {
+	header 'Riak Cluster'
+	head -1 "$riak_config"
+}
+
+# Check the svcs output
+show_service() {
+	header 'Checking Service'
+	svcs "$svc_name"
+}
+
+# Check the process
+show_process() {
+	header 'Checking Process'
+	running=false
+	if ps -ef | grep riak | grep beam; then
+		running=true
+		ret=0
+	else
+		echo 'not running'
+		ret=2
+	fi
+	return "$ret"
+}
+
+# Check compaction errors
+show_compaction() {
+	header 'Checking Compaction Errors'
+	cd "$db_dir" || { echo "unknown: failed to cd to '$db_dir'"; return 3; }
+	local a=$(find . -name 'LOG' -exec grep -l 'Compaction error' {} \;)
+
+	if [[ -z "$a" ]]; then
+		echo 'ok: no compaction errors found'
+		ret=0
+	else
+		# compaction errors found
+		if $nagios; then
+			echo "critical: $(wc -l <<< "$a") compaction error(s) found"
+		else
+			# interactive
+			cat <<-EOF
+			-------- Compaction errors found! --------
+			The following steps will resolve them
+			$_bold** stop the process before running!! **$_reset
+
+			# Run the following command(s) one-by-one
+			# (safe to run multiple commands at the same time to saturate disks)
+			EOF
+			while read line; do
+				tmp=${line/.\//}; dbname=${tmp%%\/*}
+				printf '%s "%s" "%s/%s"\n' "$escript" "$lvlfix" "$db_dir" "$dbname"
+			done <<< "$a"
+		fi
+		ret=2
+	fi
+	return "$ret"
+}
+
+# Check ping
+show_local_ping() {
+	header 'Checking Riak Ping'
+	sudo -u riak -H riak ping && return 0 || return 2
+}
+
+# Ping port
+show_remote_ping() {
+	header 'Checking Riak Stats Ping'
+	out=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/ping")
+	[[ -n "$out" ]] && echo "$out"
+	if [[ "$out" == "OK" ]]; then
+		ret=0
+	else
+		echo 'critical: ping failed'
+		ret=2
+	fi
+	return "$ret"
+}
+
+# check rss
+show_rss() {
+	header 'Checking rss'
+	# Get riak rss
+	if [[ -n "$riak_pid" ]]; then
+		local rss=$(ps -H -o rss= -p "$riak_pid")
+		local ret=
+		if [[ -z $rss ]]; then
+			echo "unknown: error getting rss for pid $riak_pid"
+			return 3
+		fi
+		rss=${rss}000 # turn it into bytes
+		if (( rss > rss_critical )); then
+			echo -n 'critical: '
+			ret=2
+		elif (( rss > rss_warning )); then
+			echo -n 'warning: '
+			ret=1
+		else
+			echo -n 'ok: '
+			ret=0
+		fi
+
+		local pretty_rss=$(_commas <<< "${rss%000}")K
+		echo "$pretty_rss rss"
+		return "$ret"
+	fi
+
+	echo 'unknown: failed to get system rss'
+	return 3
+}
+
+# Check stats
+show_stats() {
+	header 'Checking /stats (riak_kv_vnodes_running)'
+	local out=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/stats" | json riak_kv_vnodes_running)
+	if (( $? != 0 )) || [[ -z "$out" ]]; then
+		echo "critical: failed (timeout: $stats_timeout seconds)"
+		ret=2
+	else
+		echo "ok: stats responded with $out"
+		ret=0
+	fi
+	return "$ret"
+}
+
+show_profile() {
+	header 'Profiling Riak'
+	dtrace -qn '
+	profile-97
+	/pid == $target && arg1/
+	{
+		@[uaddr(arg1)] = count();
+	}
+	tick-5s
+	{
+		trunc(@, 10);
+		exit(0);
+	}' -p "$riak_pid"
+}
+
+# Check singelton
+show_singleton() {
+	header 'Checking Singleton'
+	local total_vnodes=$(grep ring_creation_size "$riak_config" | awk '{ gsub("[^0-9]", ""); print $0 }')
+	local running_vnodes=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/stats" | json riak_kv_vnodes_running)
+
+	if [[ -z "$total_vnodes" ]]; then
+		echo "unknown: failed to find total vnodes in $riak_config"
+		return 3
+	elif [[ -z "$running_vnodes" ]]; then
+		echo 'unknown: failed to find running vnodes in /stats'
+		return 3
+	fi
+
+	if (( running_vnodes >= total_vnodes )); then
+		echo "critical: $running_vnodes running of $total_vnodes total"
+		return 2
+	fi
+	local perc=$(( running_vnodes * 100 / total_vnodes ))
+
+	echo "ok: $running_vnodes running of $total_vnodes total ($perc%)"
+	return 0
+}
+
+# show rss
+show_system() {
+	header 'System Health'
+	# Get riak rss
+	if [[ -n "$riak_pid" ]]; then
+		local rss=$(ps -H -o rss= -p "$riak_pid" | _commas)K
+		local fds=$(ls -U1 /proc/$riak_pid/fd | wc -l | _commas)
+		echo "pid $riak_pid: $rss rss ($fds open files)"
+	else
+		echo 'failed to get system health'
+	fi
+}
+
+# check if ok to start
+show_oktostart() {
+	header 'Checking OK To Start'
+	"$escript" "$oktostart" "$db_dir"
+}
+
+# Call all checks
+main() {
+	show_config
+	svcs &>/dev/null && show_service
+	show_process
+	if $running; then
+		show_system
+		show_local_ping
+		show_remote_ping
+		show_singleton
+		$all && show_stats
+		$all && dtrace -V &>/dev/null && show_profile
+		$all && show_rss
+	else
+		show_oktostart
+	fi
+	show_compaction
+}
+
+all=false
+db_dir='/var/db/riak/leveldb'
+nagios=false
+riak_config='/opt/local/etc/riak/app.config'
+rss_warning=50000000000
+rss_critical=60000000000
+riak_port=8098
+riak_host='localhost'
+stats_timeout=10 # seconds
+svc_name='riak'
+while getopts 'ac:d:nhH:p:s:t:W:C:' options; do
+	case "$options" in
+		a) all=true;;
+		c) riak_config=$OPTARG;;
+		d) db_dir=$OPTARG;;
+		H) riak_host=$OPTARG;;
+		n) nagios=true;;
+		p) riak_port=$OPTARG;;
+		s) svc_name=$OPTARG;;
+		t) stats_timeout=$OPTARG;;
+		W) rss_warning=$OPTARG;;
+		C) rss_critical=$OPTARG;;
+		h) usage >&2; exit 0;;
+		*) usage >&2; exit 1;;
+	esac
+done
+shift $((OPTIND - 1))
+
+riak_pid=$(svcs -lp riak 2>/dev/null | grep beam.smp | awk '{print $2}')
+
+case "$1" in
+	compaction) show_compaction;;
+	config) show_config;;
+	oktostart) show_oktostart;;
+	ping) show_remote_ping;;
+	process) show_process;;
+	profile) show_profile;;
+	riakping) show_local_ping;;
+	rss) show_rss;;
+	service) show_service;;
+	singleton) show_singleton;;
+	stats) show_stats;;
+	system) show_system;;
+	*) main;;
+esac
+ret=$?
+$nagios || echo
+exit "$ret"
