@@ -82,7 +82,7 @@ Run `check-riak` with no arguments to see health of a node
 
     $ sudo check-riak
                                 Riak Cluster
-    %% Test Cluster
+    %% Test Cluster (1.3.0)
 
                             Checking Service
     STATE          STIME    FMRI
@@ -117,7 +117,7 @@ There's a lot of output, so let's go through it section by section.
 #### `Riak Cluster`
 
 This section is very simple, it prints out the first line (`head -1`) of the
-Riak `app.config` file.
+Riak `app.config` file as well as the Riak version number.
 
 At Voxer, we have multiple Riak clusters and we put the name of the cluster as
 a comment on the first line of the config, so this helps us identify which
