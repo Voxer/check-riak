@@ -271,6 +271,12 @@ show_profile() {
 show_singleton() {
 	header 'Checking Singleton'
 	local stats_json=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/stats")
+
+	if [[ -z "$stats_json" ]]; then
+		echo 'unknown: failed to curl /stats'
+		return 3
+	fi
+
 	local ring_members=$(json ring_members <<< "${stats_json:-{}}" | json -a | wc -l)
 
 	if [[ -z "$ring_members" ]]; then
