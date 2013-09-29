@@ -270,25 +270,21 @@ show_profile() {
 # Check singelton
 show_singleton() {
 	header 'Checking Singleton'
-	local total_vnodes=$(grep ring_creation_size "$riak_config" | awk '{ gsub("[^0-9]", ""); print $0 }')
-	local running_vnodes=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/stats" | json riak_kv_vnodes_running)
+	local stats_json=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/stats")
+	local ring_members=$(json ring_members <<< "$stats_json" | json -a | wc -l)
 
-	if [[ -z "$total_vnodes" ]]; then
-		echo "unknown: failed to find total vnodes in $riak_config"
-		return 3
-	elif [[ -z "$running_vnodes" ]]; then
-		echo 'unknown: failed to find running vnodes in /stats'
+	if [[ -z "$ring_members" ]]; then
+		echo 'unknown: failed to find ring_members in /stats'
 		return 3
 	fi
 
-	if (( running_vnodes >= total_vnodes )); then
-		echo "critical: $running_vnodes running of $total_vnodes total"
+	if (( ring_members == 1 )); then
+		echo "critical: $ring_members ring member found"
 		return 2
+	else
+		echo "ok: $ring_members ring members found"
+		return 0
 	fi
-	local perc=$(( running_vnodes * 100 / total_vnodes ))
-
-	echo "ok: $running_vnodes running of $total_vnodes total ($perc%)"
-	return 0
 }
 
 # show rss
