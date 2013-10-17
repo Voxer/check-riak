@@ -277,7 +277,7 @@ show_singleton() {
 		return 3
 	fi
 
-	local ring_members=$(json ring_members <<< "${stats_json:-{}}" | json -a | wc -l)
+	local ring_members=$(json ring_members <<< "$stats_json" | json -a | wc -l)
 
 	if [[ -z "$ring_members" ]]; then
 		echo 'unknown: failed to find ring_members in /stats'
