@@ -277,7 +277,19 @@ show_singleton() {
 		return 3
 	fi
 
-	local ring_members=$(json ring_members <<< "$stats_json" | json -a | wc -l)
+	local ring_members
+	ring_members=$(json ring_members <<< "$stats_json")
+	if (($? != 0)) || [[ -z $ring_members ]]; then
+		echo 'unknown: failed to parse JSON response'
+		return 3
+	fi
+
+	ring_members=$(json -a <<< "$ring_members")
+	if (($? != 0)) || [[ -z $ring_members ]]; then
+		echo 'unknown: failed to parse JSON response'
+		return 3
+	fi
+	ring_members=$(wc -l <<< "$ring_members")
 
 	if [[ -z "$ring_members" ]]; then
 		echo 'unknown: failed to find ring_members in /stats'
