@@ -216,13 +216,14 @@ show_rss() {
 	header 'Checking rss'
 	# Get riak rss
 	if [[ -n "$riak_pid" ]]; then
+		# local rss is in KB
 		local rss=$(ps -H -o rss= -p "$riak_pid")
 		local ret=
 		if [[ -z $rss ]]; then
 			echo "unknown: error getting rss for pid $riak_pid"
 			return 3
 		fi
-		rss=${rss}000 # turn it into bytes
+		rssb=$(($rss * 1024)) # turn it into Bytes
 		if (( rss > rss_critical )); then
 			echo -n 'critical: '
 			ret=2
@@ -234,8 +235,8 @@ show_rss() {
 			ret=0
 		fi
 
-		local pretty_rss=$(_commas <<< "${rss%000}")K
-		echo "$pretty_rss rss"
+		local pretty_rss=$(echo $rss | _commas)K
+		echo "$pretty_rss rss|rss=$rssb"
 		return "$ret"
 	fi
 
@@ -315,9 +316,12 @@ show_system() {
 	header 'System Health'
 	# Get riak rss
 	if [[ -n "$riak_pid" ]]; then
-		local rss=$(ps -H -o rss= -p "$riak_pid" | _commas)K
+		# rss is in KB
+		local rss=$(ps -H -o rss= -p "$riak_pid")
+		local rssb=$(( $rss * 1024 ))
+		local rssk=$(echo $rss | _commas)K
 		local fds=$(ls -U1 /proc/$riak_pid/fd | wc -l | _commas)
-		echo "pid $riak_pid: $rss rss ($fds open files)"
+		echo "pid $riak_pid: $rssk rss ($fds open files)|rss=$rssb"
 	else
 		echo 'failed to get system health'
 	fi
