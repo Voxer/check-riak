@@ -2,7 +2,9 @@
 #
 # Riak health check
 #
-# Author: Dave Eddy <dave@daveeddy.com>
+# Authors: 
+# Dave Eddy <dave@daveeddy.com>
+# Claudio Kuenzler <claudiokuenzler.com> (ignorelib)
 # License: MIT
 
 # colors
@@ -21,16 +23,18 @@ fi
 erl=$dir/erl
 escript=$dir/escript
 
-# find 3rd party scripts
+# find 3rd party scripts 
+findlibscripts() {
 lib_dirs=('./lib' '/opt/local/share/check-riak/lib')
 for dir in "${lib_dirs[@]}"; do
 	[[ -f "$dir/lvlfix.erl" ]] && break
 done
-if [[ ! -f "$dir/lvlfix.erl" ]]; then
+if [[ ! -f "$dir/lvlfix.erl" ]] && [[ -z $ignorelib ]]; then
 	echo '[warning] lib directory not found, third party commands will fail' >&2
 fi
 lvlfix=$dir/lvlfix.erl
 oktostart=$dir/oktostart.erl
+}
 
 # Add commas to a given input
 _commas() {
@@ -59,6 +63,7 @@ usage() {
 	  -h              print this message and exit
 	  -H <host>       the riak host, defaults to $riak_host
 	  -n              less pretty output suitable for a nagios check
+	  -i              ignore missing library warning
 	  -p <port>       the riak port, defaults to $riak_port
 	  -s <svc>        the service fmri to use for SMF, defaults to $svc_name
 	  -t <seconds>    the timeout, in seconds, when curl'ing riak, defaults to $stats_timeout
@@ -353,13 +358,14 @@ riak_port=8098
 riak_host='localhost'
 stats_timeout=10 # seconds
 svc_name='riak'
-while getopts 'ac:d:nhH:p:s:t:W:C:' options; do
+while getopts 'ac:d:nihH:p:s:t:W:C:' options; do
 	case "$options" in
 		a) all=true;;
 		c) riak_config=$OPTARG;;
 		d) db_dir=$OPTARG;;
 		H) riak_host=$OPTARG;;
 		n) nagios=true;;
+		i) ignorelib=true;;
 		p) riak_port=$OPTARG;;
 		s) svc_name=$OPTARG;;
 		t) stats_timeout=$OPTARG;;
@@ -373,6 +379,8 @@ shift $((OPTIND - 1))
 
 riak_pid=$(pgrep -f '/riak/.*/beam.smp')
 riak_version=$(riak version 2>&1 | awk '/^riak/ { match($0, /([0-9][^ ]+)/); print substr($0, RSTART, RLENGTH); }')
+
+findlibscripts
 
 case "$1" in
 	compaction) show_compaction;;
