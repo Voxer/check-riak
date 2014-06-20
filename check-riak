@@ -20,6 +20,35 @@ _commas() {
 	sed -e :a -e 's/\(.*[0-9]\)\([0-9]\{3\}\)/\1,\2/;ta'
 }
 
+# show seconds in human readable form
+_human() {
+	local seconds=$1
+	if ((seconds < 0)); then
+		((seconds *= -1))
+	fi
+
+	local times=(
+		$((seconds / 60 / 60 / 24 / 365)) # years
+		$((seconds / 60 / 60 / 24 / 30))  # months
+		$((seconds / 60 / 60 / 24))       # days
+		$((seconds / 60 / 60))            # hours
+		$((seconds / 60))                 # minutes
+		$((seconds))                      # seconds
+	)
+	local names=(year month day hour minute second)
+
+	local i j
+	for ((i = 0; i < ${#names[@]}; i++)); do
+		if ((${times[$i]} > 1)); then
+			echo "${times[$i]} ${names[$i]}s"
+			return
+		elif ((${times[$i]} == 1)); then
+			echo "${times[$i]} ${names[$i]}"
+			return
+		fi
+	done
+}
+
 # print usage
 usage() {
 	cat <<-EOF
@@ -84,9 +113,7 @@ show_service() {
 # Check the process
 show_process() {
 	header 'Checking Process'
-	running=false
 	if ps -ef | grep riak | grep beam; then
-		running=true
 		ret=0
 	else
 		echo 'not running'
@@ -188,7 +215,9 @@ show_rss() {
 		fi
 
 		local pretty_rss=$(echo "$rss" | _commas)K
-		echo "$pretty_rss rss|rss=$rssb"
+		echo -n "$pretty_rss rss"
+		$nagios && echo -n "|rss=$rssb"
+		echo
 		return "$ret"
 	fi
 
@@ -274,16 +303,21 @@ show_system() {
 		local rssb=$((rss * 1024))
 		local rssk=$(echo "$rss" | _commas)K
 		local fds=$(ls -U1 "/proc/$riak_pid/fd" | wc -l | _commas)
-		echo "pid $riak_pid: $rssk rss ($fds open files)|rss=$rssb"
+		echo -n "pid $riak_pid: $rssk rss ($fds open files)"
+		$nagios && echo -n "|rss=$rssb"
+		echo
 	else
 		echo 'failed to get system health - no pid found'
 	fi
 }
 
-# check if ok to start
-show_oktostart() {
-	header 'Checking OK To Start'
-	"$escript" "$oktostart" "$db_dir"
+# check when riak last restarted
+show_last_restarted() {
+	header 'Riak Last Restarted'
+	local now=$(date +%s)
+	local started=$(stat -c %Y "/proc/$riak_pid")
+	local delta=$((now - started))
+	echo "riak started $(_human "$delta") ago"
 }
 
 # Call all checks
@@ -291,16 +325,15 @@ main() {
 	show_config
 	svcs &>/dev/null && show_service
 	show_process
-	if $running; then
+	if [[ -n $riak_pid ]]; then
 		show_system
 		show_local_ping
 		show_remote_ping
 		show_singleton
-		$all && show_stats
+		show_stats
+		show_last_restarted
 		$all && dtrace -V &>/dev/null && show_profile
 		$all && show_rss
-	else
-		show_oktostart
 	fi
 	show_compaction
 }
@@ -333,6 +366,7 @@ while getopts 'ac:d:hH:np:s:t:W:C:' options; do
 done
 shift $((OPTIND - 1))
 
+# riak getpid is slow and inconsistent, so instead we do this awfully
 riak_pid=$(pgrep -f '/riak/.*/beam.smp')
 riak_version=$(riak version 2>&1)
 
@@ -342,6 +376,7 @@ case "$1" in
 	ping) show_remote_ping;;
 	process) show_process;;
 	profile) show_profile;;
+	restarted) show_last_restarted;;
 	riakping) show_local_ping;;
 	rss) show_rss;;
 	service) show_service;;
