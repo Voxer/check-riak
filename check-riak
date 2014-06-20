@@ -2,7 +2,7 @@
 #
 # Riak health check
 #
-# Authors: 
+# Authors:
 # Dave Eddy <dave@daveeddy.com>
 # Claudio Kuenzler <claudiokuenzler.com> (ignorelib)
 # License: MIT
@@ -12,29 +12,8 @@ _bold=$(tput bold 2>/dev/null)
 _yellow=$(tput setaf 3 2>/dev/null)
 _reset=$(tput sgr0 2>/dev/null)
 
-# find erl and escript
-erts_dirs=('/opt/local/riak/erts-5.8.5/bin' '/opt/local/lib/riak/erts-5.9.1/bin')
-for dir in "${erts_dirs[@]}"; do
-	[[ -d "$dir" ]] && break
-done
-if [[ ! -d "$dir" ]]; then
-	echo '[warning] erts directory not found, escript and erl commands will fail' >&2
-fi
-erl=$dir/erl
-escript=$dir/escript
-
-# find 3rd party scripts 
-findlibscripts() {
-lib_dirs=('./lib' '/opt/local/share/check-riak/lib')
-for dir in "${lib_dirs[@]}"; do
-	[[ -f "$dir/lvlfix.erl" ]] && break
-done
-if [[ ! -f "$dir/lvlfix.erl" ]] && [[ -z $ignorelib ]]; then
-	echo '[warning] lib directory not found, third party commands will fail' >&2
-fi
-lvlfix=$dir/lvlfix.erl
-oktostart=$dir/oktostart.erl
-}
+# erlang shell
+erl=/opt/local/lib/riak/erts*/bin/erl
 
 # Add commas to a given input
 _commas() {
@@ -63,7 +42,6 @@ usage() {
 	  -h              print this message and exit
 	  -H <host>       the riak host, defaults to $riak_host
 	  -n              less pretty output suitable for a nagios check
-	  -i              ignore missing library warning
 	  -p <port>       the riak port, defaults to $riak_port
 	  -s <svc>        the service fmri to use for SMF, defaults to $svc_name
 	  -t <seconds>    the timeout, in seconds, when curl'ing riak, defaults to $stats_timeout
@@ -73,7 +51,6 @@ usage() {
 	optional arguments
 	  compaction      check for compaction errors
 	  config          show the first line of the riak config
-	  oktostart       check if riak is ok to start
 	  ping            check riak ping using /ping
 	  process         parse ps for the running process
 	  profile         profile beam.smp with DTrace
@@ -121,14 +98,15 @@ show_process() {
 # Check compaction errors
 show_compaction() {
 	header 'Checking Compaction Errors'
-	cd "$db_dir" || { echo "unknown: failed to cd to '$db_dir'"; return 3; }
+
+	if ! cd "$db_dir"; then
+		echo "unknown: failed to cd to '$db_dir'"
+		return 3
+	fi
+
 	local a=$(find . -name 'LOG' -exec grep -l 'Compaction error' {} \;)
-	local clean_riak_version=${riak_version%%[^0-9.]*} # ex. 1.3.1v1 => 1.3.1
 
-	local tmp=${clean_riak_version//[^0-9]/}
-	local num_riak_version=$(( 10#$tmp )) # ex. 1.3.1 => 131
-
-	if [[ -z "$a" ]]; then
+	if [[ -z $a ]]; then
 		echo 'ok: no compaction errors found'
 		ret=0
 	else
@@ -137,54 +115,28 @@ show_compaction() {
 			echo "critical: $(wc -l <<< "$a") compaction error(s) found"
 		else
 			# interactive
-			echo '-------- Compaction errors found! --------'
-			if (( $num_riak_version < 120 )); then
-				cat <<-EOF
-				[debug] You are running a riak version < 1.2.0 ($riak_version), using erlang shell
+			cat <<-EOF
+			-------- Compaction errors found! --------
+			** $_bold Stop riak before doing anything! $_reset**
+			follow the instructions below to fix the compaction errors
 
-				# Start the erl shell
-				$erl
+			# Start the erl shell
+			[sudo] $erl
 
-				# Copy this in
-				[application:set_env(eleveldb, Var, Val) || {Var, Val} <-
-				[{max_open_files, 2000},
-				{block_size, 1048576},
-				{cache_size, 20*1024*1024*1024},
-				{sync, false},
-				{data_root, "$db_dir"}]].
+			# Copy this in
+			[application:set_env(eleveldb, Var, Val) || {Var, Val} <-
+			[{max_open_files, 2000},
+			{block_size, 1048576},
+			{cache_size, 20*1024*1024*1024},
+			{sync, false},
+			{data_root, "$db_dir"}]].
 
-				# Drop the following command(s) in one-by-one
-				EOF
-				while read line; do
-					tmp=${line/.\//}; dbname=${tmp%%\/*};
-					printf 'eleveldb:repair("/var/db/riak/leveldb/%s", []).\n' "$dbname"
-				done <<< "$a"
-			elif grep -q '^1.2' <<< "$riak_version"; then
-				# riak 1.2 can use lvlfix
-				cat <<-EOF
-				[debug] You are running a 1.2.X version of riak ($riak_version), using lvlfix.erl
-
-				The following steps will resolve them
-				$_bold** stop the process before running!! **$_reset
-
-				# Run the following command(s) one-by-one
-				# (safe to run multiple commands at the same time to saturate disks)
-				EOF
-				while read line; do
-					tmp=${line/.\//}; dbname=${tmp%%\/*}
-					printf '%s "%s" "%s/%s"\n' "$escript" "$lvlfix" "$db_dir" "$dbname"
-				done <<< "$a"
-			else
-				# 1.3 or up, no known fix
-				cat <<-EOF
-				[debug] You are running a riak version >= 1.3.0 ($riak_version), no known solution
-
-				Compaction errors now have a way of fixing themselves automatically.
-
-				If the errors do not resolve automatically, then this would be a time to use
-				your Basho support contract or check out the IRC channels
-				EOF
-			fi
+			# Drop the following command(s) in one-by-one
+			EOF
+			while read line; do
+				tmp=${line/.\//}; dbname=${tmp%%\/*};
+				printf 'eleveldb:repair("/var/db/riak/leveldb/%s", []).\n' "$dbname"
+			done <<< "$a"
 		fi
 		ret=2
 	fi
@@ -194,15 +146,15 @@ show_compaction() {
 # Check ping
 show_local_ping() {
 	header 'Checking Riak Ping'
-	sudo -u riak -H riak ping && return 0 || return 2
+	riak ping && return 0 || return 2
 }
 
 # Ping port
 show_remote_ping() {
 	header 'Checking Riak Stats Ping'
 	out=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/ping")
-	[[ -n "$out" ]] && echo "$out"
-	if [[ "$out" == "OK" ]]; then
+	[[ -n $out ]] && echo "$out"
+	if [[ $out == "OK" ]]; then
 		ret=0
 	else
 		echo 'critical: ping failed'
@@ -215,7 +167,7 @@ show_remote_ping() {
 show_rss() {
 	header 'Checking rss'
 	# Get riak rss
-	if [[ -n "$riak_pid" ]]; then
+	if [[ -n $riak_pid ]]; then
 		# local rss is in KB
 		local rss=$(ps -H -o rss= -p "$riak_pid")
 		local ret=
@@ -223,11 +175,11 @@ show_rss() {
 			echo "unknown: error getting rss for pid $riak_pid"
 			return 3
 		fi
-		rssb=$(($rss * 1024)) # turn it into Bytes
-		if (( rss > rss_critical )); then
+		rssb=$((rss * 1024)) # turn it into Bytes
+		if ((rss > rss_critical)); then
 			echo -n 'critical: '
 			ret=2
-		elif (( rss > rss_warning )); then
+		elif ((rss > rss_warning)); then
 			echo -n 'warning: '
 			ret=1
 		else
@@ -235,7 +187,7 @@ show_rss() {
 			ret=0
 		fi
 
-		local pretty_rss=$(echo $rss | _commas)K
+		local pretty_rss=$(echo "$rss" | _commas)K
 		echo "$pretty_rss rss|rss=$rssb"
 		return "$ret"
 	fi
@@ -248,7 +200,7 @@ show_rss() {
 show_stats() {
 	header 'Checking /stats (riak_kv_vnodes_running)'
 	local out=$(curl -sSm "$stats_timeout" "http://$riak_host:$riak_port/stats" | json riak_kv_vnodes_running)
-	if (( $? != 0 )) || [[ -z "$out" ]]; then
+	if (($? != 0)) || [[ -z $out ]]; then
 		echo "critical: failed (timeout: $stats_timeout seconds)"
 		ret=2
 	else
@@ -258,10 +210,11 @@ show_stats() {
 	return "$ret"
 }
 
+# Dtrace riak
 show_profile() {
 	header 'Profiling Riak'
 	dtrace -qn '
-	profile-97
+	profile-997
 	/pid == $target && arg1/
 	{
 		@[uaddr(arg1)] = count();
@@ -297,12 +250,12 @@ show_singleton() {
 	fi
 	ring_members=$(wc -l <<< "$ring_members")
 
-	if [[ -z "$ring_members" ]]; then
+	if [[ -z $ring_members ]]; then
 		echo 'unknown: failed to find ring_members in /stats'
 		return 3
 	fi
 
-	if (( ring_members == 1 )); then
+	if ((ring_members == 1)); then
 		echo "critical: $ring_members ring member found"
 		return 2
 	else
@@ -315,15 +268,15 @@ show_singleton() {
 show_system() {
 	header 'System Health'
 	# Get riak rss
-	if [[ -n "$riak_pid" ]]; then
+	if [[ -n $riak_pid ]]; then
 		# rss is in KB
 		local rss=$(ps -H -o rss= -p "$riak_pid")
-		local rssb=$(( $rss * 1024 ))
-		local rssk=$(echo $rss | _commas)K
-		local fds=$(ls -U1 /proc/$riak_pid/fd | wc -l | _commas)
+		local rssb=$((rss * 1024))
+		local rssk=$(echo "$rss" | _commas)K
+		local fds=$(ls -U1 "/proc/$riak_pid/fd" | wc -l | _commas)
 		echo "pid $riak_pid: $rssk rss ($fds open files)|rss=$rssb"
 	else
-		echo 'failed to get system health'
+		echo 'failed to get system health - no pid found'
 	fi
 }
 
@@ -362,14 +315,13 @@ riak_port=8098
 riak_host='localhost'
 stats_timeout=10 # seconds
 svc_name='riak'
-while getopts 'ac:d:nihH:p:s:t:W:C:' options; do
+while getopts 'ac:d:hH:np:s:t:W:C:' options; do
 	case "$options" in
 		a) all=true;;
 		c) riak_config=$OPTARG;;
 		d) db_dir=$OPTARG;;
 		H) riak_host=$OPTARG;;
 		n) nagios=true;;
-		i) ignorelib=true;;
 		p) riak_port=$OPTARG;;
 		s) svc_name=$OPTARG;;
 		t) stats_timeout=$OPTARG;;
@@ -382,14 +334,11 @@ done
 shift $((OPTIND - 1))
 
 riak_pid=$(pgrep -f '/riak/.*/beam.smp')
-riak_version=$(riak version 2>&1 | awk '/^riak/ { match($0, /([0-9][^ ]+)/); print substr($0, RSTART, RLENGTH); }')
-
-findlibscripts
+riak_version=$(riak version 2>&1)
 
 case "$1" in
 	compaction) show_compaction;;
 	config) show_config;;
-	oktostart) show_oktostart;;
 	ping) show_remote_ping;;
 	process) show_process;;
 	profile) show_profile;;

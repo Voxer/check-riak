@@ -167,16 +167,14 @@ result in data corruption or data loss.
 
 In order to retrieve the number of VNodes running, the stats interface `/stats`
 is curl'd and [jsontool][jsontool] is used to extract the metric
-`riak_kv_vnodes_running`. `ring_creation_size` is gathered by grepping and
-awking the `app.config` file.
+`riak_kv_vnodes_running`.
 
 #### `Checking Compaction Errors`
 
 This check looks for compaction errors for the data on the filesystem.
 
 If there are any compaction errors found, this tool will print the steps required
-to resolve the errors.  The `lvlfix.erl` script used for fixing the errors
-is included with this tool.
+to resolve the errors.
 
 ---
 
@@ -258,7 +256,6 @@ Notes
 - This script assumes the first line of your `app.config` is meaningful
 - [jsontool][jsontool] is required for some of the checks to work; SmartOS has this installed by default
 - Escalated privileges are required for certain actions, though `sudo` itself isn't necessarily required
-- Third-party tools provided to fix compaction and check if riak is OK to start provided by https://gist.github.com/evanmcc/9fd0c3fb0751b55d376b
 - Logic to find compaction errors found here https://gist.github.com/gburd/b88aee6da7fee81dc036
 
 <a name="license" />
@@ -267,7 +264,7 @@ License
 -------
 
 LICENSE - "MIT License"
-Copyright (c) 2013 Voxer LLC. All rights reserved.
+Copyright (c) 2013-2014 Voxer LLC. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
