@@ -162,7 +162,7 @@ show_compaction() {
 			EOF
 			while read line; do
 				tmp=${line/.\//}; dbname=${tmp%%\/*};
-				printf 'eleveldb:repair("/var/db/riak/leveldb/%s", []).\n' "$dbname"
+				printf 'eleveldb:repair("%s/%s", []).\n' "$db_dir" "$dbname"
 			done <<< "$a"
 		fi
 		ret=2
