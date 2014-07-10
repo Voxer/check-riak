@@ -47,6 +47,7 @@ _human() {
 			return
 		fi
 	done
+	echo '0 seconds'
 }
 
 # print usage
