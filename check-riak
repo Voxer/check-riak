@@ -343,7 +343,7 @@ main() {
 all=false
 db_dir='/var/db/riak/leveldb'
 nagios=false
-riak_config='/opt/local/etc/riak/app.config'
+riak_config='/etc/riak/app.config'
 rss_warning=50000000000
 rss_critical=60000000000
 riak_port=8098
