@@ -197,7 +197,7 @@ show_rss() {
 	# Get riak rss
 	if [[ -n $riak_pid ]]; then
 		# local rss is in KB
-		local rss=$(ps -H -o rss= -p "$riak_pid")
+		local rss=$(ps -o rss= -p "$riak_pid" | tail -1)
 		local ret=
 		if [[ -z $rss ]]; then
 			echo "unknown: error getting rss for pid $riak_pid"
@@ -300,7 +300,7 @@ show_system() {
 	# Get riak rss
 	if [[ -n $riak_pid ]]; then
 		# rss is in KB
-		local rss=$(ps -H -o rss= -p "$riak_pid")
+		local rss=$(ps -o rss= -p "$riak_pid" | tail -1)
 		local rssb=$((rss * 1024))
 		local rssk=$(echo "$rss" | _commas)K
 		local fds=$(ls -U1 "/proc/$riak_pid/fd" | wc -l | _commas)
