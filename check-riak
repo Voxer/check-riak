@@ -20,6 +20,12 @@ _commas() {
 	sed -e :a -e 's/\(.*[0-9]\)\([0-9]\{3\}\)/\1,\2/;ta'
 }
 
+# Get the mtime in epoch seconds of a file
+_mtime() {
+	stat -c %Y "$1" 2>/dev/null ||
+		stat -f %m "$1"
+}
+
 # show seconds in human readable form
 _human() {
 	local seconds=$1
@@ -114,7 +120,7 @@ show_service() {
 # Check the process
 show_process() {
 	header 'Checking Process'
-	if ps -ef | grep riak | grep beam; then
+	if ps aux | grep riak | grep beam; then
 		ret=0
 	else
 		echo 'not running'
@@ -303,7 +309,8 @@ show_system() {
 		local rss=$(ps -o rss= -p "$riak_pid" | tail -1)
 		local rssb=$((rss * 1024))
 		local rssk=$(echo "$rss" | _commas)K
-		local fds=$(ls -U1 "/proc/$riak_pid/fd" | wc -l | _commas)
+		local fds=$(ls -U1 "/proc/$riak_pid/fd" 2>/dev/null | wc -l | tr -d ' ' | _commas)
+		[[ -z $fds || $fds == 0 ]] && fds=$(( $(fstat -p "$riak_pid" | wc -l | tr -d ' ') - 1))
 		echo -n "pid $riak_pid: $rssk rss ($fds open files)"
 		$nagios && echo -n "|rss=$rssb"
 		echo
@@ -316,7 +323,8 @@ show_system() {
 show_last_restarted() {
 	header 'Riak Last Restarted'
 	local now=$(date +%s)
-	local started=$(stat -c %Y "/proc/$riak_pid")
+	local started=$(_mtime "/proc/$riak_pid" 2>/dev/null)
+	[[ -z $started ]] && started=$(_mtime "/compat/linux/proc/$riak_pid")
 	local delta=$((now - started))
 	$nagios && echo -n "[$started] "
 	echo "riak started $(_human "$delta") ago"
