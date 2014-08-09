@@ -20,6 +20,34 @@ _commas() {
 	sed -e :a -e 's/\(.*[0-9]\)\([0-9]\{3\}\)/\1,\2/;ta'
 }
 
+# Get the mtime in epoch seconds of a file
+_mtime() {
+	stat -c %Y "$1" 2>/dev/null ||
+		stat -f %m "$1"
+}
+
+# Get the number of lines
+_linecount() {
+	wc -l | tr -d ' '
+}
+
+# limit the number of columns printed
+_limitcolumns () {
+	local cols=$1
+	local red=$(tput setaf 1 2>/dev/null)
+	cols=${cols:-$COLUMNS}
+	cols=${cols:-$(tput cols)}
+	cols=${cols:-80}
+	awk "
+	{
+		s = \$0;
+		if (length(s) > $cols)
+			s = substr(\$0, 0, $cols - 1) \"$red>$_reset\";
+		print s
+	}"
+}
+
+
 # show seconds in human readable form
 _human() {
 	local seconds=$1
@@ -114,7 +142,8 @@ show_service() {
 # Check the process
 show_process() {
 	header 'Checking Process'
-	if ps -ef | grep riak | grep beam; then
+	ps auxwww | grep riak | grep beam | _limitcolumns
+	if ((${PIPESTATUS[2]} == 0)); then
 		ret=0
 	else
 		echo 'not running'
@@ -140,7 +169,7 @@ show_compaction() {
 	else
 		# compaction errors found
 		if $nagios; then
-			echo "critical: $(wc -l <<< "$a") compaction error(s) found"
+			echo "critical: $(_linecount <<< "$a") compaction error(s) found"
 		else
 			# interactive
 			cat <<-EOF
@@ -197,7 +226,7 @@ show_rss() {
 	# Get riak rss
 	if [[ -n $riak_pid ]]; then
 		# local rss is in KB
-		local rss=$(ps -H -o rss= -p "$riak_pid")
+		local rss=$(ps -o rss= -p "$riak_pid" | tail -1)
 		local ret=
 		if [[ -z $rss ]]; then
 			echo "unknown: error getting rss for pid $riak_pid"
@@ -278,7 +307,7 @@ show_singleton() {
 		echo 'unknown: failed to parse JSON response'
 		return 3
 	fi
-	ring_members=$(wc -l <<< "$ring_members")
+	ring_members=$(_linecount <<< "$ring_members")
 
 	if [[ -z $ring_members ]]; then
 		echo 'unknown: failed to find ring_members in /stats'
@@ -300,10 +329,11 @@ show_system() {
 	# Get riak rss
 	if [[ -n $riak_pid ]]; then
 		# rss is in KB
-		local rss=$(ps -H -o rss= -p "$riak_pid")
+		local rss=$(ps -o rss= -p "$riak_pid" | tail -1)
 		local rssb=$((rss * 1024))
 		local rssk=$(echo "$rss" | _commas)K
-		local fds=$(ls -U1 "/proc/$riak_pid/fd" | wc -l | _commas)
+		local fds=$(ls -U1 "/proc/$riak_pid/fd" 2>/dev/null | _linecount | _commas)
+		[[ -z $fds || $fds == 0 ]] && fds=$(( $(fstat -p "$riak_pid" | _linecount | tr -d ' ') - 1))
 		echo -n "pid $riak_pid: $rssk rss ($fds open files)"
 		$nagios && echo -n "|rss=$rssb"
 		echo
@@ -316,7 +346,8 @@ show_system() {
 show_last_restarted() {
 	header 'Riak Last Restarted'
 	local now=$(date +%s)
-	local started=$(stat -c %Y "/proc/$riak_pid")
+	local started=$(_mtime "/proc/$riak_pid" 2>/dev/null)
+	[[ -z $started ]] && started=$(_mtime "/compat/linux/proc/$riak_pid")
 	local delta=$((now - started))
 	$nagios && echo -n "[$started] "
 	echo "riak started $(_human "$delta") ago"
